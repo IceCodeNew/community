@@ -1,0 +1,9 @@
+[tools]
+node = "20"
+python = ["3.11", "3.12"]
+bun = "latest"
+uv = "latest"
+shellcheck = "latest"
+shfmt = "latest"
+
+"pipx:pytest" = "latest"

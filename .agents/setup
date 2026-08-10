@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+cd "$repo_root"
+
+readonly GIT_USER_NAME='IceCodeNew'
+readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
+
+run_step() {
+	local label="$1"
+	shift
+	printf '==> %s\n' "$label"
+	time "$@"
+}
+
+install_system_packages() {
+	if command -v curl >/dev/null 2>&1 &&
+		command -v git >/dev/null 2>&1 &&
+		command -v ssh-keygen >/dev/null 2>&1; then
+		return
+	fi
+
+	sudo apt-get update
+	sudo apt-get install -y ca-certificates curl git openssh-client
+}
+
+install_mise() {
+	if ! command -v mise >/dev/null 2>&1; then
+		curl -fsSL https://mise.run | sh
+	fi
+	export PATH="$HOME/.local/bin:$PATH"
+}
+
+configure_mise_login_shell() {
+	local profile="$HOME/.bash_profile"
+	local marker='# community mise activation'
+
+	touch "$profile"
+	if grep -Fqx "$marker" "$profile"; then
+		return
+	fi
+	cat >>"$profile" <<'EOF'
+
+# community mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash)"
+fi
+EOF
+}
+
+install_mise_tools() {
+	mise trust "$repo_root/mise.toml"
+	mise install
+	eval "$(mise activate bash)"
+	mise reshim
+}
+
+configure_git() (
+	local signing_dir="${XDG_CONFIG_HOME:-$HOME/.config}/community/git"
+	local signing_key="$signing_dir/commit-signing-key"
+	local allowed_signers="$signing_dir/allowed-signers"
+	local temporary_key
+	local temporary_allowed_signers
+
+	install -m 0700 -d "$signing_dir"
+	if [[ -z "${GIT_SSH_KEY:-}" ]]; then
+		printf '%s\n' 'GIT_SSH_KEY must contain the base64-encoded Git signing key.' >&2
+		return 1
+	fi
+
+	umask 077
+	temporary_key="$(mktemp "$signing_dir/.commit-signing-key.XXXXXX")"
+	temporary_allowed_signers="$(mktemp "$signing_dir/.allowed-signers.XXXXXX")"
+	trap 'rm -f "$temporary_key" "$temporary_allowed_signers"' EXIT
+	printf '%s' "$GIT_SSH_KEY" | base64 --decode >"$temporary_key" 2>/dev/null
+	ssh-keygen -y -f "$temporary_key" >/dev/null 2>&1
+	printf '%s %s\n' "$GIT_USER_EMAIL" "$(ssh-keygen -y -f "$temporary_key")" >"$temporary_allowed_signers"
+	install -m 0600 "$temporary_key" "$signing_key"
+	install -m 0600 "$temporary_allowed_signers" "$allowed_signers"
+	git config --global user.name "$GIT_USER_NAME"
+	git config --global user.email "$GIT_USER_EMAIL"
+	git config --global user.signingkey "$signing_key"
+	git config --global commit.gpgsign true
+	git config --global gpg.format ssh
+	git config --global gpg.ssh.program ssh-keygen
+	git config --global gpg.ssh.allowedSignersFile "$allowed_signers"
+)
+
+configure_amp_commit_privacy() {
+	local settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/amp"
+	local settings_path="$settings_dir/settings.json"
+
+	mkdir -p "$settings_dir"
+	SETTINGS_PATH="$settings_path" python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["SETTINGS_PATH"])
+settings = json.loads(path.read_text()) if path.exists() else {}
+settings["amp.git.commit.ampThread.enabled"] = False
+settings["amp.git.commit.coauthor.enabled"] = False
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+temporary.chmod(0o600)
+temporary.replace(path)
+PY
+}
+
+initialize_submodules() {
+	git submodule update --init --recursive
+}
+
+run_step 'Install required system packages' install_system_packages
+run_step 'Install mise' install_mise
+run_step 'Configure mise for login shells' configure_mise_login_shell
+run_step 'Install mise-managed development tools' install_mise_tools
+run_step 'Configure signed Git commits' configure_git
+run_step 'Disable commit identity trailers' configure_amp_commit_privacy
+run_step 'Initialize Git submodules' initialize_submodules
+
+printf '%s\n' 'Orb setup complete.'
