@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+cd "$repo_root"
+
+readonly GIT_USER_NAME='IceCodeNew'
+readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
+readonly GIT_SIGNING_KEY="${XDG_CONFIG_HOME:-$HOME/.config}/community/git/commit-signing-key"
+readonly GIT_ALLOWED_SIGNERS="${XDG_CONFIG_HOME:-$HOME/.config}/community/git/allowed-signers"
+
+if ! command -v mise >/dev/null 2>&1; then
+	printf '%s\n' 'mise is missing; rerun .agents/setup.' >&2
+	exit 1
+fi
+eval "$(mise activate bash)"
+
+if [[ ! -f "$GIT_SIGNING_KEY" ]] || ! ssh-keygen -y -f "$GIT_SIGNING_KEY" >/dev/null 2>&1; then
+	printf '%s\n' 'Git signing key is missing or invalid; rerun .agents/setup.' >&2
+	exit 1
+fi
+if [[ ! -f "$GIT_ALLOWED_SIGNERS" ]] ||
+	! grep -Fqx "$GIT_USER_EMAIL $(ssh-keygen -y -f "$GIT_SIGNING_KEY")" "$GIT_ALLOWED_SIGNERS"; then
+	printf '%s\n' 'Git allowed signers are missing or invalid; rerun .agents/setup.' >&2
+	exit 1
+fi
+
+git config --global user.name "$GIT_USER_NAME"
+git config --global user.email "$GIT_USER_EMAIL"
+git config --global user.signingkey "$GIT_SIGNING_KEY"
+git config --global commit.gpgsign true
+git config --global gpg.format ssh
+git config --global gpg.ssh.program ssh-keygen
+git config --global gpg.ssh.allowedSignersFile "$GIT_ALLOWED_SIGNERS"
+
+for command_name in bun mise node npm python shellcheck shfmt uv; do
+	if ! command -v "$command_name" >/dev/null 2>&1; then
+		printf '%s is missing; rerun .agents/setup.\n' "$command_name" >&2
+		exit 1
+	fi
+done
+mise where python@3.12 >/dev/null
+
+printf '%s\n' 'Orb resume checks complete.'
