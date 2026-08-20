@@ -7,6 +7,7 @@ cd "$repo_root"
 
 readonly GIT_USER_NAME='IceCodeNew'
 readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
+readonly CODERABBIT_RELEASE_BASE='https://cli.coderabbit.ai/releases/latest'
 
 run_step() {
 	local label="$1"
@@ -18,12 +19,13 @@ run_step() {
 install_system_packages() {
 	if command -v curl >/dev/null 2>&1 &&
 		command -v git >/dev/null 2>&1 &&
-		command -v ssh-keygen >/dev/null 2>&1; then
+		command -v ssh-keygen >/dev/null 2>&1 &&
+		command -v unzip >/dev/null 2>&1; then
 		return
 	fi
 
 	sudo apt-get update
-	sudo apt-get install -y ca-certificates curl git openssh-client
+	sudo apt-get install -y --no-install-recommends ca-certificates curl git openssh-client unzip
 }
 
 install_mise() {
@@ -35,26 +37,93 @@ install_mise() {
 
 configure_mise_login_shell() {
 	local profile="$HOME/.bash_profile"
-	local marker='# community mise activation'
 
 	touch "$profile"
-	if grep -Fqx "$marker" "$profile"; then
-		return
-	fi
-	cat >>"$profile" <<'EOF'
+	PROFILE="$profile" python3 - <<'PY'
+import os
+from pathlib import Path
 
-# community mise activation
+path = Path(os.environ["PROFILE"])
+marker = "# community mise activation"
+old_block = '''# community mise activation
 if [[ -x "$HOME/.local/bin/mise" ]]; then
   eval "$("$HOME/.local/bin/mise" activate bash)"
 fi
-EOF
+'''
+correct_block = '''# community mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash)"
+  eval "$("$HOME/.local/bin/mise" hook-env -s bash)"
+fi
+'''
+content = path.read_text()
+marker_count = sum(line == marker for line in content.splitlines())
+
+if marker_count == 0:
+    remaining = content
+elif marker_count == 1 and correct_block in content:
+    remaining = content.replace(correct_block, "", 1)
+elif marker_count == 1 and old_block in content:
+    remaining = content.replace(old_block, "", 1)
+else:
+    raise SystemExit(f"Refusing to replace unrecognized or duplicate {marker!r} blocks")
+
+remaining = remaining.rstrip("\n")
+separator = "\n\n" if remaining else ""
+path.write_text(remaining + separator + correct_block)
+PY
 }
 
 install_mise_tools() {
 	mise trust "$repo_root/mise.toml"
 	mise install
 	eval "$(mise activate bash)"
+	eval "$(mise hook-env -s bash)"
 	mise reshim
+}
+
+install_coderabbit_cli() (
+	local archive_name
+	local architecture
+	local checksum
+	local temporary_dir
+
+	if command -v coderabbit >/dev/null 2>&1; then
+		return
+	fi
+
+	case "$(uname -m)" in
+	x86_64 | amd64) architecture='x64' ;;
+	aarch64 | arm64) architecture='arm64' ;;
+	*)
+		printf 'Unsupported CodeRabbit CLI architecture: %s\n' "$(uname -m)" >&2
+		return 1
+		;;
+	esac
+	archive_name="coderabbit-linux-$architecture.zip"
+	temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/community-coderabbit.XXXXXX")"
+	trap 'rm -rf "$temporary_dir"' EXIT
+
+	curl --fail --location --retry 3 --output "$temporary_dir/SHA256SUMS" \
+		"$CODERABBIT_RELEASE_BASE/SHA256SUMS"
+	curl --fail --location --retry 3 --output "$temporary_dir/$archive_name" \
+		"$CODERABBIT_RELEASE_BASE/$archive_name"
+	checksum="$(awk -v archive="./$archive_name" '$2 == archive { print $1 }' "$temporary_dir/SHA256SUMS")"
+	if [[ -z "$checksum" ]]; then
+		printf 'CodeRabbit release checksums do not include %s.\n' "$archive_name" >&2
+		return 1
+	fi
+	printf '%s  %s\n' "$checksum" "$temporary_dir/$archive_name" | sha256sum --check --strict
+	unzip -q "$temporary_dir/$archive_name" -d "$temporary_dir/extracted"
+	install -m 0755 "$temporary_dir/extracted/coderabbit" "$HOME/.local/bin/coderabbit"
+	ln -sfn "$HOME/.local/bin/coderabbit" "$HOME/.local/bin/cr"
+)
+
+verify_nmem_environment() {
+	command -v nmem >/dev/null 2>&1
+	if [[ -n "${NMEM_API_URL:-}" && -n "${NMEM_API_KEY:-}" ]]; then
+		nmem --json status >/dev/null
+	fi
 }
 
 configure_git() (
@@ -117,6 +186,8 @@ run_step 'Install required system packages' install_system_packages
 run_step 'Install mise' install_mise
 run_step 'Configure mise for login shells' configure_mise_login_shell
 run_step 'Install mise-managed development tools' install_mise_tools
+run_step 'Install CodeRabbit CLI' install_coderabbit_cli
+run_step 'Verify Nowledge Mem CLI and configured remote' verify_nmem_environment
 run_step 'Configure signed Git commits' configure_git
 run_step 'Disable commit identity trailers' configure_amp_commit_privacy
 run_step 'Initialize Git submodules' initialize_submodules

@@ -6,4 +6,5 @@ uv = "latest"
 shellcheck = "latest"
 shfmt = "latest"
 
+"pipx:nmem-cli" = "latest"
 "pipx:pytest" = "latest"
