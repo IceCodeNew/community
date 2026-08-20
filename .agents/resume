@@ -9,6 +9,7 @@ readonly GIT_USER_NAME='IceCodeNew'
 readonly GIT_USER_EMAIL='32576256+IceCodeNew@users.noreply.github.com'
 readonly GIT_SIGNING_KEY="${XDG_CONFIG_HOME:-$HOME/.config}/community/git/commit-signing-key"
 readonly GIT_ALLOWED_SIGNERS="${XDG_CONFIG_HOME:-$HOME/.config}/community/git/allowed-signers"
+readonly REVIEW_CODE_SKILL="$HOME/.config/agents/skills/review-code/SKILL.md"
 
 if ! command -v mise >/dev/null 2>&1; then
 	printf '%s\n' 'mise is missing; rerun .agents/setup.' >&2
@@ -42,6 +43,11 @@ for command_name in bun coderabbit mise nmem node npm python pytest shellcheck s
 	fi
 done
 mise where python@3.12 >/dev/null
+
+if [[ ! -f "$REVIEW_CODE_SKILL" ]] || ! grep -Fqx 'name: review-code' "$REVIEW_CODE_SKILL"; then
+	printf '%s\n' 'ninehills review-code skill is missing or invalid; rerun .agents/setup.' >&2
+	exit 1
+fi
 
 if [[ -n "${NMEM_API_URL:-}" && -n "${NMEM_API_KEY:-}" ]]; then
 	nmem --json status >/dev/null
