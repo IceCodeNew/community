@@ -1,0 +1,11 @@
+[tools]
+node = "20"
+python = ["3.11", "3.12"]
+bun = "latest"
+uv = "latest"
+shellcheck = "latest"
+shfmt = "latest"
+"npm:greptile" = "latest"
+"npm:openskills" = "latest"
+
+"pipx:pytest" = "latest"

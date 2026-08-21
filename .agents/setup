@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+cd "$repo_root"
+
+run_step() {
+	local label="$1"
+	shift
+	printf '==> %s\n' "$label"
+	time "$@"
+}
+
+install_system_packages() {
+	if command -v curl >/dev/null 2>&1 &&
+		command -v git >/dev/null 2>&1; then
+		return
+	fi
+
+	sudo apt-get update
+	sudo apt-get install -y ca-certificates curl git
+}
+
+install_mise() {
+	if ! command -v mise >/dev/null 2>&1; then
+		curl -fsSL https://mise.run | sh
+	fi
+	export PATH="$HOME/.local/bin:$PATH"
+}
+
+configure_mise_login_shell() {
+	local profile="$HOME/.bash_profile"
+
+	touch "$profile"
+	PROFILE="$profile" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["PROFILE"])
+marker = "# community mise activation"
+old_block = '''# community mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash)"
+fi
+'''
+intermediate_block = '''# community mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash)"
+  eval "$("$HOME/.local/bin/mise" hook-env -s bash)"
+fi
+'''
+force_block = '''# community mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash)"
+  eval "$("$HOME/.local/bin/mise" hook-env -f -s bash)"
+fi
+'''
+new_block = '''# community mise activation
+if [[ -x "$HOME/.local/bin/mise" ]]; then
+  eval "$("$HOME/.local/bin/mise" activate bash --shims)"
+fi
+'''
+content = path.read_text()
+count = sum(line == marker for line in content.splitlines())
+
+if count == 0:
+    content = content.rstrip("\n")
+    separator = "\n\n" if content else ""
+    path.write_text(content + separator + new_block)
+elif count == 1 and old_block in content:
+    path.write_text(content.replace(old_block, new_block, 1))
+elif count == 1 and intermediate_block in content:
+    path.write_text(content.replace(intermediate_block, new_block, 1))
+elif count == 1 and force_block in content:
+    path.write_text(content.replace(force_block, new_block, 1))
+elif count != 1 or new_block not in content:
+    raise SystemExit("Refusing to replace an unrecognized mise activation block")
+PY
+}
+
+install_mise_tools() {
+	mise trust "$repo_root/mise.toml"
+	mise install
+	eval "$(mise activate bash --shims)"
+	mise reshim
+}
+
+install_coderabbit_cli() {
+	# The official installer selects the current stable binary for this platform.
+	# Authentication remains an explicit user action and is never persisted here.
+	curl -fsSL https://cli.coderabbit.ai/install.sh | env CI=1 sh
+}
+
+install_ninehills_skills() {
+	# Install the repository's public skill set through the universal skill loader.
+	openskills install --global --universal --yes ninehills/skills
+}
+
+configure_amp_commit_privacy() {
+	local settings_dir="${XDG_CONFIG_HOME:-$HOME/.config}/amp"
+	local settings_path="$settings_dir/settings.json"
+
+	mkdir -p "$settings_dir"
+	SETTINGS_PATH="$settings_path" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["SETTINGS_PATH"])
+settings = json.loads(path.read_text()) if path.exists() else {}
+settings["amp.git.commit.ampThread.enabled"] = False
+settings["amp.git.commit.coauthor.enabled"] = False
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+temporary.chmod(0o600)
+temporary.replace(path)
+PY
+}
+
+initialize_submodules() {
+	git submodule update --init --recursive
+}
+
+run_step 'Install required system packages' install_system_packages
+run_step 'Install mise' install_mise
+run_step 'Configure mise for login shells' configure_mise_login_shell
+run_step 'Install mise-managed development tools' install_mise_tools
+run_step 'Install the latest CodeRabbit CLI' install_coderabbit_cli
+run_step 'Install NineHills skills' install_ninehills_skills
+run_step 'Disable commit identity trailers' configure_amp_commit_privacy
+run_step 'Initialize Git submodules' initialize_submodules
+
+printf '%s\n' 'Orb setup complete.'
